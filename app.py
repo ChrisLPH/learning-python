@@ -14,15 +14,30 @@ st.set_page_config(
 
 # Initialisation du client Anthropic
 @st.cache_resource
+# def init_anthropic():
+#     # Charger depuis .env en local
+#     from dotenv import load_dotenv
+#     load_dotenv()
+
+#     api_key = os.getenv("ANTHROPIC_API_KEY")
+#     if not api_key:
+#         st.error("Clé API Anthropic manquante dans le fichier .env !")
+#         st.stop()
+#     return anthropic.Anthropic(api_key=api_key)
 def init_anthropic():
     # Charger depuis .env en local
-    from dotenv import load_dotenv
-    load_dotenv()
+    if os.path.exists('.env'):
+        from dotenv import load_dotenv
+        load_dotenv()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+    else:
+        # Charger depuis les secrets de Streamlit en production
+        api_key = st.secrets.get("api_key")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        st.error("Clé API Anthropic manquante dans le fichier .env !")
+        st.error("Clé API Anthropic manquante !")
         st.stop()
+
     return anthropic.Anthropic(api_key=api_key)
 
 client = init_anthropic()
@@ -56,10 +71,10 @@ def save_progress(progress_data):
 
 # Système de prompt pour Claude
 def get_coach_prompt(context):
-    return f"""Tu es Coach Python, un assistant pédagogique super cool qui aide une fille de 13 ans à apprendre Python.
+    return f"""Tu es Coach Python, un assistant pédagogique Marg', 13 ans, à apprendre Python.
 
 TON STYLE :
-- Parle comme un grand frère sympa et décontracté
+- Parle comme un pote sympa et décontracté
 - Utilise des emojis mais pas trop
 - Sois encourageant et positif
 - Ne donne JAMAIS directement les réponses, mais guide avec des indices
@@ -70,6 +85,11 @@ RÈGLES IMPORTANTES :
 - Donne des indices progressifs (3 niveaux max)
 - Si elle galère, encourage et reformule différemment
 - Célèbre ses réussites !
+- Quand elle doit aller faire ses tests dans visual studio code ou le terminal, pense à lui dire.
+- Si elle demande de l'aide, donne un indice ou reformule la question
+- Si elle a fini un exercice, demande-lui si elle veut passer au suivant ou revoir
+- Si elle a fini le module, félicite-la et propose de continuer ou de faire un projet
+- Si elle demande un défi, propose un exercice adapté à son niveau
 
 CONTEXTE ACTUEL :
 {context}
