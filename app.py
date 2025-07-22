@@ -281,7 +281,7 @@ MODULE INFO: {"Module 1 - Les bases de Python" if module == 1 else "Module 2 - C
 def get_coach_response(context, user_message):
     try:
         response = client.messages.create(
-            model="claude-3-sonnet-20240229",
+            model="claude-3-7-sonnet-latest",
             max_tokens=1000,
             messages=[
                 {"role": "user", "content": get_coach_prompt(context) + f"\n\nUtilisateur: {user_message}"}
