@@ -14,16 +14,6 @@ st.set_page_config(
 
 # Initialisation du client Anthropic
 @st.cache_resource
-# def init_anthropic():
-#     # Charger depuis .env en local
-#     from dotenv import load_dotenv
-#     load_dotenv()
-
-#     api_key = os.getenv("ANTHROPIC_API_KEY")
-#     if not api_key:
-#         st.error("Clé API Anthropic manquante dans le fichier .env !")
-#         st.stop()
-#     return anthropic.Anthropic(api_key=api_key)
 def init_anthropic():
     # Charger depuis .env en local
     if os.path.exists('.env'):
@@ -49,29 +39,53 @@ except ImportError:
     st.error("Modules pédagogiques non trouvés ! Vérifiez le dossier modules/")
     st.stop()
 
-# Gestion de la progression
-PROGRESS_FILE = "progress.json"
-
+# Gestion de la progression - CORRIGÉ pour Streamlit Cloud
 def load_progress():
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {
+    # En production Streamlit Cloud, utiliser session_state comme stockage persistant
+    if 'progress_data' in st.session_state:
+        return st.session_state.progress_data
+
+    # En local, essayer de charger depuis le fichier JSON
+    progress_file = "progress.json"
+    if os.path.exists(progress_file):
+        try:
+            with open(progress_file, 'r', encoding='utf-8') as f:
+                progress = json.load(f)
+                # Sauvegarder dans session_state aussi
+                st.session_state.progress_data = progress
+                return progress
+        except:
+            pass  # Si erreur de lecture, utiliser les valeurs par défaut
+
+    # Valeurs par défaut
+    default_progress = {
         "current_module": 1,
         "current_lesson": 1,
         "completed_exercises": [],
         "hints_used": {},
         "last_session": None
     }
+    st.session_state.progress_data = default_progress
+    return default_progress
 
 def save_progress(progress_data):
     progress_data["last_session"] = datetime.now().isoformat()
-    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(progress_data, f, indent=2, ensure_ascii=False)
+
+    # TOUJOURS sauvegarder dans session_state (fonctionne partout)
+    st.session_state.progress_data = progress_data
+
+    # Essayer de sauvegarder dans le fichier aussi (local uniquement)
+    try:
+        progress_file = "progress.json"
+        with open(progress_file, 'w', encoding='utf-8') as f:
+            json.dump(progress_data, f, indent=2, ensure_ascii=False)
+    except:
+        # Silencieusement ignorer l'erreur (normal sur Streamlit Cloud)
+        pass
 
 # Système de prompt pour Claude
-def get_coach_prompt(context):
-    return f"""Tu es Coach Python, un assistant pédagogique Marg', 13 ans, à apprendre Python.
+def get_coach_system_prompt(context):
+    return f"""Tu es Coach Python, un assistant pédagogique qui aide Marg', 13 ans, à apprendre Python.
 
 TON STYLE :
 - Parle comme un pote sympa et décontracté
@@ -161,6 +175,14 @@ def main():
             save_progress(st.session_state.progress)
             st.rerun()
 
+        # Bouton pour effacer l'historique
+        st.markdown("---")
+        if st.button("🗑️ Nouvelle conversation", help="Efface l'historique et recommence"):
+            st.session_state.messages = []
+            welcome_msg = get_welcome_message(st.session_state.progress)
+            st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
+            st.rerun()
+
         st.markdown("---")
         st.markdown("### 🏆 Exercices terminés")
         for ex in progress["completed_exercises"]:
@@ -191,7 +213,7 @@ def main():
         # Get coach response with spinner
         with st.spinner("Coach réfléchit... 🤔"):
             context = build_context(st.session_state.progress, prompt)
-            response = get_coach_response(context, prompt)
+            response = get_coach_response(context, st.session_state.messages)
 
         # Display assistant response in chat message container
         with st.chat_message("assistant"):
@@ -241,7 +263,7 @@ def get_welcome_message(progress):
 
 Tu es dans le Module {module}, leçon {lesson}. On continue là où on s'était arrêté !
 
-Tu peux me dire ce que tu as envie de faire :
+Tu peux me dire ce que tu has envie de faire :
 - Continuer la leçon en cours
 - Me poser une question sur Python
 - Demander un nouveau défi
@@ -278,14 +300,46 @@ MESSAGE UTILISATEUR: {user_message}
 MODULE INFO: {"Module 1 - Les bases de Python" if module == 1 else "Module 2 - Création du jeu du pendu"}
 """
 
-def get_coach_response(context, user_message):
+def get_coach_response(context, messages_history):
+    """
+    CORRECTION MAJEURE : Envoie tout l'historique à Claude pour maintenir le contexte
+    """
     try:
+        # Construire l'historique des messages pour Claude
+        claude_messages = []
+
+        # Le premier message (bienvenue) n'est pas envoyé à Claude car c'est nous qui l'avons généré
+        # On commence à partir du 2ème message s'il y en a
+        user_messages = [msg for msg in messages_history if msg["role"] == "user"]
+        assistant_messages = [msg for msg in messages_history if msg["role"] == "assistant"]
+
+        # Reconstituer l'historique en alternant user/assistant
+        # On skip le premier message de bienvenue généré par nous
+        history_messages = messages_history[1:] if len(messages_history) > 1 else []
+
+        for msg in history_messages[:-1]:  # Tous sauf le dernier (qui est le message actuel)
+            claude_messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+
+        # Ajouter le message actuel de l'utilisateur
+        if messages_history and messages_history[-1]["role"] == "user":
+            current_user_message = messages_history[-1]["content"]
+            claude_messages.append({
+                "role": "user",
+                "content": current_user_message
+            })
+
+        # Si pas d'historique, juste le contexte
+        if not claude_messages:
+            claude_messages = [{"role": "user", "content": f"Contexte: {context}"}]
+
         response = client.messages.create(
-            model="claude-3-7-sonnet-latest",
+            model="claude-3-7-sonnet-latest",  # Ton modèle choisi
             max_tokens=1000,
-            messages=[
-                {"role": "user", "content": get_coach_prompt(context) + f"\n\nUtilisateur: {user_message}"}
-            ]
+            system=get_coach_system_prompt(context),  # Utilise system prompt au lieu de l'inclure dans le message
+            messages=claude_messages
         )
         return response.content[0].text
     except Exception as e:
